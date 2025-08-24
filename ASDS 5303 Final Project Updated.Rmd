@@ -1,0 +1,301 @@
+---
+title: "ASDS 5303 Final Prroject"
+author: "Phuong Trinh, Devadharshini Udayakumar, Yagyesh Jaiswal"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+# Abstract
+
+This project analyzes the 2019 Airline Delays dataset to identify patterns contributing to flight delays. We focus on Frontier Airlines Inc. and use LDA and QDA models to predict delay status using weather-related variables.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyr)
+library(ggplot2)
+library(readr)
+library(MASS)
+library(caret)
+#library(GGally)
+library(ggcorrplot)
+
+```
+
+# Load Data
+```{r}
+flights_data <- read.csv("/Users/thienphuong/Downloads/full_data_flightdelay.csv")
+head(flights_data)
+```
+
+Sample Selection
+
+```{r}
+library(dplyr)
+airline_delay <- flights_data %>%
+  filter(CARRIER_NAME == "Southwest Airlines Co.")  
+
+airline_sample <- airline_delay %>%
+  sample_n(1000)
+#write_csv(airline_sample, "/Users/devadharshini/Desktop/5303-docs/Final_project/delta_sample_unbalanced.csv") 
+```
+
+## Data preprocessing 
+
+```{r}
+colnames(airline_sample)
+```
+```{r}
+# Create DelayStatus column
+library(dplyr)
+airline_sample <- airline_sample %>%
+  filter(!is.na(DEP_DEL15)) %>%
+  mutate(DelayStatus = ifelse(DEP_DEL15 == 1, "Delayed", "OnTime"))
+
+
+
+# Select relevant features
+airline_sample <- airline_sample %>%
+  select( MONTH, DAY_OF_WEEK, DISTANCE_GROUP,
+         SEGMENT_NUMBER,CONCURRENT_FLIGHTS,AIRPORT_FLIGHTS_MONTH,
+         AVG_MONTHLY_PASS_AIRPORT,
+         AIRPORT_FLIGHTS_MONTH,
+         PLANE_AGE, PRCP, SNOW, SNWD, TMAX, AWND,DelayStatus)
+
+#Check for missing values
+colSums(is.na(airline_sample)) 
+
+```
+There are no missing values.
+
+## Exploratory Data Analysis
+
+```{r}
+library(ggplot2)
+ggplot(airline_sample, aes(x = DelayStatus, fill = DelayStatus)) +
+  geom_bar() +
+  labs(title = "Flight Delay Status Distribution", x = "Status", y = "Count") +
+  theme_minimal()
+```
+
+
+```{r}
+summary(dplyr::select(airline_sample,PLANE_AGE, PRCP, SNOW, TMAX, AWND))
+```
+```{r}
+library(tidyverse)
+
+# Step 1: Reshape the data to long format
+boxplot_data <- airline_sample %>%
+  select(DelayStatus, PLANE_AGE, PRCP, SNOW, TMAX, AWND) %>%
+  pivot_longer(cols = -DelayStatus, names_to = "Variable", values_to = "Value")
+
+# Step 2: Create the combined boxplot with facets
+ggplot(boxplot_data, aes(x = DelayStatus, y = Value, fill = DelayStatus)) +
+  geom_boxplot() +
+  facet_wrap(~ Variable, scales = "free_y") +
+  labs(
+    title = "Boxplot of DelayStatus vs Flight and Weather Features",
+    x = "Delay Status",
+    y = "Value"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+#ggsave("/Users/devadharshini/Desktop/5303-docs/Final_project/facet_boxplots.png", width = 12, height = 8, dpi = 300)
+```
+Correlation Analysis:
+```{r}
+library(reshape2)
+library(ggplot2)
+
+# Step 1: Select only numeric columns
+num_cols <- airline_sample[sapply(airline_sample, is.numeric)]
+
+# Step 2: Compute correlation matrix
+cor_matrix <- round(cor(num_cols, use = "complete.obs"), 2)
+
+# Step 3: Mask the upper triangle
+cor_matrix[upper.tri(cor_matrix)] <- NA
+
+# Step 4: Melt to long format (only lower triangle remains)
+melted_cor <- melt(cor_matrix, na.rm = TRUE)
+
+# Step 5: Plot with ggplot2
+ggplot(data = melted_cor, aes(x = Var2, y = Var1, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = value), color = "black", size = 3) +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                       midpoint = 0, limit = c(-1, 1), space = "Lab",
+                       name = "Correlation") +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 9),
+    axis.text.y = element_text(size = 9),
+    plot.title = element_text(hjust = 0.5, size = 14),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 8)
+  ) +
+  labs(title = "Lower Triangular Correlation Matrix", x = NULL, y = NULL)
+
+```
+```{r}
+cor_data <- dplyr::select(airline_sample, PRCP, SNOW, TMAX, AWND, PLANE_AGE)
+cor_matrix <- cor(cor_data)
+
+ggcorrplot(cor_matrix, lab = TRUE, colors = c("blue", "white", "red"),
+           title = "Correlation Matrix of Weather Features")
+```
+
+# Modeling 
+## Train-Test Split
+```{r}
+set.seed(42)
+
+# Stratified split
+train_index <- createDataPartition(airline_sample$DelayStatus, p = 0.7, list = FALSE)
+train_data <- airline_sample[train_index, ]
+test_data <- airline_sample[-train_index, ]
+
+# Check class counts
+table(train_data$DelayStatus)
+table(test_data$DelayStatus)
+
+
+```
+
+## LDA Model 
+```{r}
+#train_data$DelayStatus <- factor(train_data$DelayStatus, levels = c("Delayed", "OnTime"))
+#test_data$DelayStatus <- factor(test_data$DelayStatus, levels = c("Delayed", "OnTime"))
+
+# Fit LDA model
+lda_model <- lda(DelayStatus ~ ., data = train_data)
+lda_pred <- predict(lda_model, test_data)
+
+# Format predictions and actuals for confusionMatrix
+predicted <- factor(lda_pred$class, levels = c("Delayed", "OnTime"))
+actual <- factor(test_data$DelayStatus, levels = c("Delayed", "OnTime"))
+
+confusionMatrix(predicted, actual)
+```
+
+
+
+## QDA Model 
+```{r}
+# Ensure target variables are consistent factors
+
+
+# Train QDA model
+qda_model <- qda(DelayStatus ~ . , data = train_data)
+
+# Predict on test set
+qda_pred <- predict(qda_model, test_data)
+
+# Make sure predictions are treated as a factor with the same levels
+predicted_qda <- factor(qda_pred$class, levels = c("Delayed", "OnTime"))
+actual_qda <- factor(test_data$DelayStatus, levels = c("Delayed", "OnTime"))
+
+# Confusion matrix
+confusionMatrix(predicted_qda, actual_qda)
+```
+
+
+## Accuracy of LDA and QDA Comparison 
+```{r}
+# Calculate accuracy for both models
+lda_acc <- mean(predicted == actual)
+qda_acc <- mean(predicted_qda == actual_qda)
+
+# Print comparison
+accuracy_df <- data.frame(
+  Model = c("LDA", "QDA"),
+  Accuracy = c(round(lda_acc, 4), round(qda_acc, 4))
+)
+
+accuracy_df
+```
+The accuracy comparison shows that LDA slightly outperformed QDA, achieving 52.67% compared to QDA’s 49.67%. Although both are close to the 50% threshold (equivalent to guessing), LDA shows marginal improvement and may generalize slightly better for this classification task.
+
+ROC Curve:
+```{r roc-curve, fig.width=7, fig.height=5}
+library(ROCR)
+
+# Get LDA probabilities
+lda_probs <- lda_pred$posterior[, "Delayed"]
+pred_lda <- prediction(lda_probs, actual)
+perf_lda <- performance(pred_lda, "tpr", "fpr")
+
+# Get QDA probabilities
+qda_probs <- qda_pred$posterior[, "Delayed"]
+pred_qda <- prediction(qda_probs, actual_qda)
+perf_qda <- performance(pred_qda, "tpr", "fpr")
+
+# Plot ROC curves
+plot(perf_lda, col = "blue", lwd = 2, main = "ROC Curve: LDA vs QDA")
+plot(perf_qda, col = "red", lwd = 2, add = TRUE)
+legend("bottomright", legend = c("LDA", "QDA"), col = c("blue", "red"), lwd = 2)
+```
+The ROC curve shows both LDA and QDA models performing close to the diagonal line, which suggests a low level of true signal distinguishing delayed from on-time flights. While LDA (blue) slightly outperforms QDA (red) in certain regions, both models hover around random guessing (AUC is approximate 0.5), indicating weak discriminative power when using weather features alone.
+
+
+PCA + Decision Boundary
+
+```{r}
+
+library(MASS)
+library(ggplot2)
+library(dplyr)
+
+# Step 1: Train LDA and QDA
+lda_class <- predict(lda(DelayStatus ~ ., data = train_data), test_data)$class
+qda_class <- predict(qda(DelayStatus ~ ., data = train_data), test_data)$class
+
+# Step 2: PCA transformation on test data
+pca_model <- prcomp(train_data %>% select(-DelayStatus), center = TRUE, scale. = TRUE)
+pca_test <- predict(pca_model, test_data %>% select(-DelayStatus))
+
+# Step 3: Create long-form data with model labels
+pca_combined <- bind_rows(
+  data.frame(PC1 = pca_test[, 1], PC2 = pca_test[, 2],
+             Actual = test_data$DelayStatus,
+             Predicted = lda_class, Model = "LDA"),
+  
+  data.frame(PC1 = pca_test[, 1], PC2 = pca_test[, 2],
+             Actual = test_data$DelayStatus,
+             Predicted = qda_class, Model = "QDA")
+)
+
+# Filter out LDA and QDA plots
+pca_lda <- filter(pca_combined, Model == "LDA")
+pca_qda <- filter(pca_combined, Model == "QDA")
+
+# Plot LDA
+p1 <- ggplot(pca_lda, aes(x = PC1, y = PC2)) +
+  geom_point(aes(shape = Actual, fill = Predicted),
+             color = "black", size = 3, stroke = 0.8, alpha = 0.75) +
+  scale_shape_manual(values = c("Delayed" = 21, "OnTime" = 24)) +
+  scale_fill_manual(values = c("Delayed" = "red", "OnTime" = "skyblue")) +
+  labs(title = "LDA Prediction in PCA Space", subtitle = "Blue = Correct Prediction | Red = Wrong Prediction") +
+  theme_minimal(base_size = 14)
+
+# Plot QDA
+p2 <- ggplot(pca_qda, aes(x = PC1, y = PC2)) +
+  geom_point(aes(shape = Actual, fill = Predicted),
+             color = "black", size = 3, stroke = 0.8, alpha = 0.75) +
+  scale_shape_manual(values = c("Delayed" = 21, "OnTime" = 24)) +
+  scale_fill_manual(values = c("Delayed" = "red", "OnTime" = "skyblue")) +
+  labs(title = "QDA Prediction in PCA Space", subtitle = "Blue = Correct Prediction | Red = Wrong Prediction") +
+  theme_minimal(base_size = 14)
+
+# View plots separately
+print(p1)
+print(p2)
+```
+
+```
