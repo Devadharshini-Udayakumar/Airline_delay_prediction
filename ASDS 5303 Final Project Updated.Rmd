@@ -1,6 +1,6 @@
 ---
-title: "ASDS 5303 Final Prroject"
-author: "Phuong Trinh, Devadharshini Udayakumar, Yagyesh Jaiswal"
+title: "Flight Delay Prediction"
+author: "Devadharshini Udayakumar"
 date: "`r Sys.Date()`"
 output:
   pdf_document: default
@@ -26,11 +26,11 @@ library(ggcorrplot)
 
 # Load Data
 ```{r}
-flights_data <- read.csv("/Users/thienphuong/Downloads/full_data_flightdelay.csv")
+flights_data <- read.csv("/Users/devadharshini/Downloads/full_data_flightdelay.csv")
 head(flights_data)
 ```
 
-Sample Selection
+#Sample Selection
 
 ```{r}
 library(dplyr)
